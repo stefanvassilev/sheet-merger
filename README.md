@@ -4,6 +4,8 @@ Merge sheets from multiple Excel files into a single workbook, preserving all
 formatting, formulas, charts, tab colours, and styles.  
 Runs entirely on your machine — no internet connection needed after setup.
 
+![Demo](demo.gif)
+
 ---
 
 ## Requirements
