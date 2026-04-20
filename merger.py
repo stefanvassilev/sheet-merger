@@ -17,7 +17,6 @@ Requirements:
 """
 
 import argparse
-import glob
 import os
 import shutil
 import subprocess
@@ -49,14 +48,18 @@ class SheetEntry:
     file_path: str   # absolute path to the source Excel file
     file_key: str    # unique identifier for this file (used as default prefix)
     sheet_name: str  # original sheet name inside the source file
+    custom_name: str = ""  # if non-empty, overrides the prefix-computed final name
 
 
 # ── Excel / name helpers ──────────────────────────────────────────────────────
 
 def find_excel_files(directory: str) -> List[str]:
     result: List[str] = []
-    for pattern in ("*.xlsx", "*.xls", "*.xlsm", "*.xlsb"):
-        result.extend(glob.glob(os.path.join(directory, pattern)))
+    extensions = {".xlsx", ".xls", ".xlsm", ".xlsb", ".csv"}
+    for root, _dirs, files in os.walk(directory):
+        for f in files:
+            if os.path.splitext(f)[1].lower() in extensions:
+                result.append(os.path.join(root, f))
     return sorted(result)
 
 
@@ -322,8 +325,10 @@ class TUI:
             "\u2191\u2193 Navigate",
             "SPACE Grab sheet",
             "G Grab file group",
-            "DEL Remove file",
+            "DEL Remove sheet",
+            "SDEL Remove file",
             "E Edit prefix",
+            "R Rename sheet",
             "ENTER Confirm",
             "Q Quit",
         ]
@@ -360,7 +365,7 @@ class TUI:
 
             e = self.sheets[idx]
             pfx    = self.prefixes.get(e.file_key, e.file_key)
-            final  = sanitize(f"{pfx}_{e.sheet_name}")
+            final  = e.custom_name if e.custom_name else sanitize(f"{pfx}_{e.sheet_name}")
             src    = os.path.basename(e.file_path)
 
             is_sel        = idx == self.cursor
@@ -399,7 +404,7 @@ class TUI:
         elif self.grabbed and self.sheets:
             e   = self.sheets[self.cursor]
             pfx = self.prefixes.get(e.file_key, e.file_key)
-            nm  = sanitize(f"{pfx}_{e.sheet_name}")
+            nm  = e.custom_name if e.custom_name else sanitize(f"{pfx}_{e.sheet_name}")
             msg  = (f" \u25ba Grabbed \"{nm}\" "
                     f"\u2014 \u2191\u2193 to move, SPACE to drop, ESC to cancel ")
             attr = self._a(_CP_YELLOW, bold=True)
@@ -446,10 +451,14 @@ class TUI:
             self.grabbed = True
         elif key in (ord('g'), ord('G')) and n > 0:
             self._grab_group()
-        elif key in (curses.KEY_DC, ord('r'), ord('R')) and n > 0:
+        elif key == curses.KEY_DC and n > 0:
+            self._remove_sheet()
+        elif key == curses.KEY_SDC and n > 0:
             self._remove_file_group()
         elif key in (ord('e'), ord('E')) and n > 0:
             self._edit_prefix()
+        elif key in (ord('r'), ord('R')) and n > 0:
+            self._edit_sheet_name()
         elif key in (10, 13, curses.KEY_ENTER):
             if not self.sheets:
                 self.flash = "Nothing to merge \u2014 add files first"
@@ -493,6 +502,15 @@ class TUI:
         self.cursor       = non_group_before   # first sheet of the group
         self.grabbed_group = True
         self.grabbed_key   = fk
+
+    def _remove_sheet(self) -> None:
+        """Remove only the sheet at the cursor."""
+        if not self.sheets:
+            return
+        e = self.sheets[self.cursor]
+        self.sheets.pop(self.cursor)
+        self.cursor = min(self.cursor, max(0, len(self.sheets) - 1))
+        self.flash = f'Removed "{e.sheet_name}"'
 
     def _remove_file_group(self) -> None:
         """Remove all sheets belonging to the current sheet's source file."""
@@ -573,6 +591,55 @@ class TUI:
             self.flash = f'Prefix updated to "{new_pfx}"'
         else:
             self.flash = "Prefix cannot be empty \u2014 keeping original"
+
+    def _edit_sheet_name(self) -> None:
+        if not self.sheets:
+            return
+        e       = self.sheets[self.cursor]
+        pfx     = self.prefixes.get(e.file_key, e.file_key)
+        current = e.custom_name if e.custom_name else sanitize(f"{pfx}_{e.sheet_name}")
+        H, W    = self.stdscr.getmaxyx()
+        prompt  = f" Name for \"{e.sheet_name}\": "
+        value   = list(current)
+        cancelled = False
+
+        curses.curs_set(1)
+        while True:
+            last = H - 1
+            self.stdscr.move(last, 0)
+            self.stdscr.clrtoeol()
+            display = prompt + ''.join(value) + '\u2588'
+            self._put(last, 0, display[: W - 1], self._a(_CP_YELLOW, bold=True))
+            cx = min(len(prompt) + len(value), W - 2)
+            try:
+                self.stdscr.move(last, cx)
+            except curses.error:
+                pass
+            self.stdscr.refresh()
+
+            k = self.stdscr.getch()
+            if k in (10, 13, curses.KEY_ENTER):
+                break
+            elif k == 27:                              # Esc → cancel
+                cancelled = True
+                break
+            elif k in (curses.KEY_BACKSPACE, 127, 8):
+                if value:
+                    value.pop()
+            elif 32 <= k <= 126:
+                value.append(chr(k))
+
+        curses.curs_set(0)
+        if cancelled:
+            self.flash = "Rename cancelled"
+            return
+        new_name = sanitize(''.join(value).strip())
+        if new_name:
+            e.custom_name = new_name
+            self.flash = f'Sheet renamed to "{new_name}"'
+        else:
+            e.custom_name = ""
+            self.flash = "Name cleared \u2014 using prefix-computed name"
 
 
 # ── Merge ─────────────────────────────────────────────────────────────────────
@@ -673,7 +740,7 @@ def merge_files(
     entries = []
     for entry in sheets:
         pfx  = prefixes.get(entry.file_key, entry.file_key)
-        base = sanitize(f"{pfx}_{entry.sheet_name}")
+        base = entry.custom_name if entry.custom_name else sanitize(f"{pfx}_{entry.sheet_name}")
         name = unique_name(base, used)
         used.add(name)
         entries.append((entry.file_path, entry.sheet_name, name))
@@ -743,12 +810,12 @@ def main() -> None:
     if not os.path.isdir(directory):
         sys.exit(f"Error: '{directory}' is not a valid directory.")
 
-    print(f"Scanning: {directory}")
+    print(f"Scanning (recursively): {directory}")
     files = find_excel_files(directory)
     if not files:
-        sys.exit("No Excel files found in that directory.")
+        sys.exit("No Excel or CSV files found in that directory (searched recursively).")
 
-    print(f"Found {len(files)} file(s). Reading sheet names via Excel...")
+    print(f"Found {len(files)} file(s) (Excel + CSV). Reading sheet names via Excel...")
 
     try:
         excel = win32com.client.DispatchEx("Excel.Application")

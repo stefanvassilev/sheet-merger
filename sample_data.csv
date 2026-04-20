@@ -1,0 +1,11 @@
+Date,Product,Region,Units Sold,Unit Price,Revenue
+2024-01-05,Widget A,North,120,29.99,3598.80
+2024-01-05,Widget B,South,85,49.99,4249.15
+2024-01-12,Widget A,East,200,29.99,5998.00
+2024-01-12,Widget C,West,60,99.99,5999.40
+2024-01-19,Widget B,North,140,49.99,6998.60
+2024-01-19,Widget C,South,45,99.99,4499.55
+2024-01-26,Widget A,West,310,29.99,9296.90
+2024-01-26,Widget B,East,95,49.99,4749.05
+2024-02-02,Widget C,North,80,99.99,7999.20
+2024-02-02,Widget A,South,175,29.99,5248.25
